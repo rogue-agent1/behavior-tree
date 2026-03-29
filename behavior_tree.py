@@ -1,76 +1,106 @@
 #!/usr/bin/env python3
-"""behavior_tree - Behavior tree for AI decision making (sequence, selector, etc)."""
+"""behavior_tree - Behavior tree for game AI (sequence, selector, decorator)."""
 import sys
 
-SUCCESS, FAILURE, RUNNING = "success", "failure", "running"
+class Status:
+    SUCCESS = "success"
+    FAILURE = "failure"
+    RUNNING = "running"
 
 class Node:
-    def tick(self, ctx): raise NotImplementedError
+    def tick(self, blackboard):
+        raise NotImplementedError
 
 class Action(Node):
-    def __init__(self, fn): self.fn = fn
-    def tick(self, ctx): return self.fn(ctx)
+    def __init__(self, fn):
+        self.fn = fn
+    def tick(self, bb):
+        return self.fn(bb)
 
 class Condition(Node):
-    def __init__(self, pred): self.pred = pred
-    def tick(self, ctx): return SUCCESS if self.pred(ctx) else FAILURE
+    def __init__(self, fn):
+        self.fn = fn
+    def tick(self, bb):
+        return Status.SUCCESS if self.fn(bb) else Status.FAILURE
 
 class Sequence(Node):
-    def __init__(self, children): self.children = children
-    def tick(self, ctx):
+    def __init__(self, children):
+        self.children = children
+    def tick(self, bb):
         for child in self.children:
-            r = child.tick(ctx)
-            if r != SUCCESS: return r
-        return SUCCESS
+            result = child.tick(bb)
+            if result != Status.SUCCESS:
+                return result
+        return Status.SUCCESS
 
 class Selector(Node):
-    def __init__(self, children): self.children = children
-    def tick(self, ctx):
+    def __init__(self, children):
+        self.children = children
+    def tick(self, bb):
         for child in self.children:
-            r = child.tick(ctx)
-            if r != FAILURE: return r
-        return FAILURE
+            result = child.tick(bb)
+            if result != Status.FAILURE:
+                return result
+        return Status.FAILURE
 
 class Inverter(Node):
-    def __init__(self, child): self.child = child
-    def tick(self, ctx):
-        r = self.child.tick(ctx)
-        if r == SUCCESS: return FAILURE
-        if r == FAILURE: return SUCCESS
+    def __init__(self, child):
+        self.child = child
+    def tick(self, bb):
+        r = self.child.tick(bb)
+        if r == Status.SUCCESS: return Status.FAILURE
+        if r == Status.FAILURE: return Status.SUCCESS
         return r
 
-class RepeatN(Node):
-    def __init__(self, child, n): self.child, self.n = child, n
-    def tick(self, ctx):
-        for _ in range(self.n):
-            r = self.child.tick(ctx)
-            if r != SUCCESS: return r
-        return SUCCESS
+class Repeater(Node):
+    def __init__(self, child, times):
+        self.child = child
+        self.times = times
+    def tick(self, bb):
+        for _ in range(self.times):
+            r = self.child.tick(bb)
+            if r == Status.FAILURE:
+                return Status.FAILURE
+        return Status.SUCCESS
 
 def test():
     log = []
+    def attack(bb):
+        log.append("attack")
+        return Status.SUCCESS
+    def heal(bb):
+        log.append("heal")
+        return Status.SUCCESS
     tree = Sequence([
-        Condition(lambda ctx: ctx["health"] > 0),
-        Selector([
-            Sequence([
-                Condition(lambda ctx: ctx.get("enemy_near")),
-                Action(lambda ctx: (log.append("attack"), SUCCESS)[1]),
-            ]),
-            Action(lambda ctx: (log.append("patrol"), SUCCESS)[1]),
-        ]),
+        Condition(lambda bb: bb.get("health", 100) > 20),
+        Action(attack),
     ])
-    ctx = {"health": 100, "enemy_near": True}
-    assert tree.tick(ctx) == SUCCESS
-    assert log == ["attack"]
+    bb = {"health": 50}
+    assert tree.tick(bb) == Status.SUCCESS
+    assert "attack" in log
     log.clear()
-    ctx["enemy_near"] = False
-    assert tree.tick(ctx) == SUCCESS
-    assert log == ["patrol"]
-    ctx["health"] = 0
-    assert tree.tick(ctx) == FAILURE
-    inv = Inverter(Condition(lambda c: False))
-    assert inv.tick({}) == SUCCESS
-    print("behavior_tree: all tests passed")
+    bb["health"] = 10
+    assert tree.tick(bb) == Status.FAILURE
+    assert "attack" not in log
+    sel = Selector([
+        Sequence([Condition(lambda bb: bb.get("health", 0) < 30), Action(heal)]),
+        Action(attack),
+    ])
+    log.clear()
+    bb["health"] = 10
+    assert sel.tick(bb) == Status.SUCCESS
+    assert log == ["heal"]
+    log.clear()
+    bb["health"] = 100
+    assert sel.tick(bb) == Status.SUCCESS
+    assert log == ["attack"]
+    inv = Inverter(Condition(lambda bb: False))
+    assert inv.tick({}) == Status.SUCCESS
+    count = [0]
+    rep = Repeater(Action(lambda bb: (count.__setitem__(0, count[0]+1), Status.SUCCESS)[1]), 3)
+    assert rep.tick({}) == Status.SUCCESS
+    assert count[0] == 3
+    print("All tests passed!")
 
 if __name__ == "__main__":
-    test() if "--test" in sys.argv else print("Usage: behavior_tree.py --test")
+    test() if "--test" in sys.argv else print("behavior_tree: Behavior tree AI. Use --test")
